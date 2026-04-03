@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the platform, either a teacher or a student.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The unique identifier for the user." },
+        "email": { "type": "string", "description": "The user's email address." },
+        "displayName": { "type": "string", "description": "The user's display name." },
+        "role": { "type": "string", "enum": ["teacher", "student"], "description": "The role of the user." }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Class": {
+      "title": "Class",
+      "description": "A classroom containing students and assessments.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "studentIds": { "type": "array", "items": { "type": "string" } },
+        "inviteCode": { "type": "string" }
+      },
+      "required": ["name", "teacherId", "inviteCode"]
+    },
+    "Assessment": {
+      "title": "Assessment",
+      "description": "An assignment created by a teacher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "classId": { "type": "string" },
+        "title": { "type": "string" },
+        "prompt": { "type": "string" },
+        "rubric": {
+          "type": "object",
+          "properties": {
+            "criteria": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "maxPoints": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        "dueDate": { "type": "string", "format": "date-time" }
+      },
+      "required": ["classId", "title", "prompt", "rubric"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "A student's response to an assessment.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "assessmentId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "content": { "type": "string" },
+        "score": { "type": "number" },
+        "feedback": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "graded", "revised"] },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "aiRawResponse": { "type": "string" }
+      },
+      "required": ["assessmentId", "studentId", "content", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": { "schema": "User", "description": "User profiles" },
+    "/classes/{classId}": { "schema": "Class", "description": "Classroom data" },
+    "/assessments/{assessmentId}": { "schema": "Assessment", "description": "Assessment definitions" },
+    "/submissions/{submissionId}": { "schema": "Submission", "description": "Student submissions" }
+  }
+}

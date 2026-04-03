@@ -1,0 +1,129 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: uid
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - displayName: string (optional)
+    //   - role: string (required, 'teacher' or 'student')
+    //
+    // Collection: classes
+    // Document ID: classId
+    // Fields:
+    //   - id: string
+    //   - name: string (required)
+    //   - description: string
+    //   - teacherId: string (required)
+    //   - studentIds: list (required)
+    //   - inviteCode: string (required)
+    //
+    // Collection: assessments
+    // Document ID: assessmentId
+    // Fields:
+    //   - id: string
+    //   - classId: string (required)
+    //   - title: string (required)
+    //   - prompt: string (required)
+    //   - rubric: map (required)
+    //   - dueDate: timestamp
+    //
+    // Collection: submissions
+    // Document ID: submissionId
+    // Fields:
+    //   - id: string
+    //   - assessmentId: string (required)
+    //   - studentId: string (required)
+    //   - content: string (required)
+    //   - score: number
+    //   - feedback: string
+    //   - status: string (required, 'pending', 'graded', 'revised')
+    //   - submittedAt: timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isTeacher() {
+      return isAuthenticated() && getUserData().role == 'teacher';
+    }
+
+    function isStudent() {
+      return isAuthenticated() && getUserData().role == 'student';
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        getUserData().role == 'admin' ||
+        (request.auth.token.email == "Manyavr30@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid == request.auth.uid &&
+             data.role in ['teacher', 'student'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role;
+    }
+
+    match /classes/{classId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.teacherId ||
+        request.auth.uid in resource.data.studentIds
+      );
+      allow create: if isTeacher();
+      allow update: if isAuthenticated() && (
+        request.auth.uid == resource.data.teacherId ||
+        (isStudent() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['studentIds']))
+      );
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.teacherId;
+    }
+
+    match /assessments/{assessmentId} {
+      allow read: if isAuthenticated();
+      allow create: if isTeacher();
+      allow update: if isTeacher() && request.auth.uid == get(/databases/$(database)/documents/classes/$(resource.data.classId)).data.teacherId;
+      allow delete: if isTeacher() && request.auth.uid == get(/databases/$(database)/documents/classes/$(resource.data.classId)).data.teacherId;
+    }
+
+    match /submissions/{submissionId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.studentId ||
+        request.auth.uid == get(/databases/$(database)/documents/assessments/$(resource.data.assessmentId)).data.teacherId ||
+        isTeacher() // Broad check for teacher role if needed
+      );
+      allow create: if isStudent();
+      allow update: if isAuthenticated() && (
+        (isStudent() && request.auth.uid == resource.data.studentId && resource.data.status == 'pending') ||
+        isTeacher()
+      );
+    }
+  }
+}
