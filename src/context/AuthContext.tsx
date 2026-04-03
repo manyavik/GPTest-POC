@@ -34,6 +34,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               displayName: firebaseUser.displayName || '',
               role: 'student', // Default role
             };
+            // Persist so Firestore rules (e.g. isStudent() on class join) see users/{uid}.
+            await setDoc(doc(db, 'users', firebaseUser.uid), defaultUser);
             setUser(defaultUser);
           }
         } catch (error) {
@@ -54,6 +56,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return unsubscribe;
   }, []);
+
+  // If client state has a user but Firestore has no profile (e.g. older sessions), sync so rules like isStudent() work.
+  useEffect(() => {
+    if (!user?.uid) return;
+    const ref = doc(db, 'users', user.uid);
+    getDoc(ref)
+      .then(async (snap) => {
+        if (!snap.exists()) {
+          await setDoc(ref, user);
+        }
+      })
+      .catch((e) => console.error('AuthProvider: ensure user doc', e));
+  }, [user?.uid]);
 
   const setRole = async (role: 'teacher' | 'student') => {
     if (!auth.currentUser) {

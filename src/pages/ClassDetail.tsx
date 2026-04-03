@@ -51,6 +51,7 @@ export default function ClassDetail() {
 
     const newAssessment = {
       classId,
+      teacherId: user.uid,
       title: newTitle,
       prompt: newPrompt,
       dueDate: newDueDate,

@@ -4,6 +4,8 @@ import { getFirestore, doc, getDoc, setDoc, collection, query, where, onSnapshot
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
+/** Same ID as in firebase-applet-config.json — rules must be deployed to this DB, not only (default). */
+export const FIRESTORE_DATABASE_ID = firebaseConfig.firestoreDatabaseId;
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();

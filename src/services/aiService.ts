@@ -11,13 +11,24 @@ export async function gradeSubmission(assessment: Assessment, submissionContent:
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "Failed to call grading API");
+      let detail = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (errorData?.error) detail = errorData.error;
+      } catch {
+        // non-JSON body
+      }
+      throw new Error(detail);
     }
 
     return await response.json();
   } catch (error) {
     console.error("Grading Service Error:", error);
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new Error(
+        "Could not reach the grading server. Use npm run dev (port 3000) so /api/grade is available."
+      );
+    }
     throw error;
   }
 }

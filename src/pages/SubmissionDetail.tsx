@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { CheckCircle, Sparkles, User, ArrowLeft, Save, Edit3, AlertTriangle } from 'lucide-react';
 import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
+import { AI_GRADING_PLACEHOLDER } from '../constants/submission';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Submission, Assessment } from '../types';
@@ -20,6 +21,7 @@ export default function SubmissionDetail() {
   const [editedScore, setEditedScore] = useState(0);
   const [editedFeedback, setEditedFeedback] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [studentLabel, setStudentLabel] = useState<string | null>(null);
 
   useEffect(() => {
     if (!submissionId) return;
@@ -31,6 +33,14 @@ export default function SubmissionDetail() {
         setSubmission(subData);
         setEditedScore(subData.score);
         setEditedFeedback(subData.feedback);
+
+        const userSnap = await getDoc(doc(db, 'users', subData.studentId));
+        if (userSnap.exists()) {
+          const u = userSnap.data() as { displayName?: string; email?: string };
+          setStudentLabel((u.displayName && u.displayName.trim()) || u.email || null);
+        } else {
+          setStudentLabel(null);
+        }
 
         // Fetch assessment for context
         const assRef = doc(db, 'assessments', subData.assessmentId);
@@ -59,7 +69,9 @@ export default function SubmissionDetail() {
       setIsEditing(false);
     } catch (error) {
       console.error("Revision Error:", error);
-      alert("Failed to save revision.");
+      const message =
+        error instanceof Error ? error.message : "Failed to save revision.";
+      alert(`Failed to save revision: ${message}`);
     } finally {
       setIsSaving(false);
     }
@@ -77,11 +89,13 @@ export default function SubmissionDetail() {
           </button>
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Submission Review</h1>
-            <p className="text-gray-500 mt-1">Student ID: {submission.studentId.substring(0, 8)}... | {assessment.title}</p>
+            <p className="text-gray-500 mt-1">
+              {studentLabel ?? `Student (${submission.studentId.slice(0, 6)}…)`} · {assessment.title}
+            </p>
           </div>
         </div>
 
-        {user?.role === 'teacher' && !isEditing && (
+        {user?.role === 'teacher' && !isEditing && submission.status !== 'pending' && (
           <button
             onClick={() => setIsEditing(true)}
             className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
@@ -160,16 +174,30 @@ export default function SubmissionDetail() {
               </div>
             ) : (
               <div className="space-y-6">
-                <div className="flex items-center gap-6 p-6 bg-indigo-50 rounded-2xl border border-indigo-100">
-                  <div className="text-center">
-                    <span className="text-5xl font-black text-indigo-600">{submission.score}</span>
-                    <span className="text-xs text-indigo-400 block font-bold uppercase mt-1">Score</span>
+                {submission.status === 'pending' &&
+                submission.feedback.trim() === AI_GRADING_PLACEHOLDER.trim() ? (
+                  <div className="p-6 bg-amber-50 rounded-2xl border border-amber-100">
+                    <p className="text-amber-900 font-medium">
+                      Waiting for automatic grading (OpenAI). This usually finishes within a minute while the student
+                      keeps this tab open after submitting.
+                    </p>
+                    <p className="text-sm text-amber-800/80 mt-2">
+                      If this stays here for several minutes, grading may have failed (API key, network). The student
+                      should try submitting again or ask you to grade manually.
+                    </p>
                   </div>
-                  <div className="h-12 w-px bg-indigo-200" />
-                  <p className="text-indigo-800 leading-relaxed font-medium">
-                    {submission.feedback}
-                  </p>
-                </div>
+                ) : (
+                  <div className="flex items-center gap-6 p-6 bg-indigo-50 rounded-2xl border border-indigo-100">
+                    <div className="text-center">
+                      <span className="text-5xl font-black text-indigo-600">{submission.score}</span>
+                      <span className="text-xs text-indigo-400 block font-bold uppercase mt-1">Score</span>
+                    </div>
+                    <div className="h-12 w-px bg-indigo-200" />
+                    <p className="text-indigo-800 leading-relaxed font-medium whitespace-pre-wrap">
+                      {submission.feedback}
+                    </p>
+                  </div>
+                )}
 
                 {user?.role === 'student' && (
                   <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 flex items-start gap-3">

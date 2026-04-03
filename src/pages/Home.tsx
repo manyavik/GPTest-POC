@@ -22,7 +22,9 @@ export default function Home() {
       navigate('/dashboard');
     } catch (error) {
       console.error("Home: Login Error:", error);
-      alert("Login failed. Check console for details.");
+      const message =
+        error instanceof Error ? error.message : "Something went wrong during login.";
+      alert(`Login failed: ${message}`);
     }
   };
 

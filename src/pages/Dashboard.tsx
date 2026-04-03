@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [newClassName, setNewClassName] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(true);
+  const [joining, setJoining] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -53,18 +54,28 @@ export default function Dashboard() {
     e.preventDefault();
     if (!user || !inviteCode.trim()) return;
 
-    const q = query(collection(db, 'classes'), where('inviteCode', '==', inviteCode.toUpperCase()));
-    const snapshot = await getDocs(q);
+    const code = inviteCode.trim().toUpperCase();
+    setJoining(true);
+    try {
+      const q = query(collection(db, 'classes'), where('inviteCode', '==', code));
+      const snapshot = await getDocs(q);
 
-    if (!snapshot.empty) {
-      const classDoc = snapshot.docs[0];
-      await updateDoc(doc(db, 'classes', classDoc.id), {
-        studentIds: arrayUnion(user.uid)
-      });
-      setInviteCode('');
-      setShowJoinModal(false);
-    } else {
-      alert('Invalid invite code');
+      if (!snapshot.empty) {
+        const classDoc = snapshot.docs[0];
+        await updateDoc(doc(db, 'classes', classDoc.id), {
+          studentIds: arrayUnion(user.uid),
+        });
+        setInviteCode('');
+        setShowJoinModal(false);
+      } else {
+        alert('Invalid invite code. Check with your teacher and try again.');
+      }
+    } catch (err) {
+      console.error('Join class failed:', err);
+      const msg = err instanceof Error ? err.message : 'Could not join this class.';
+      alert(msg);
+    } finally {
+      setJoining(false);
     }
   };
 
@@ -205,9 +216,10 @@ export default function Dashboard() {
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 py-3 px-6 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100"
+                    disabled={!showCreateModal && joining}
+                    className="flex-1 py-3 px-6 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    {showCreateModal ? 'Create' : 'Join'}
+                    {showCreateModal ? 'Create' : joining ? 'Joining…' : 'Join'}
                   </button>
                 </div>
               </form>

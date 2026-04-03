@@ -1,4 +1,6 @@
 rules_version = '2';
+// Deploy to database: ai-studio-9667486d-fba1-4a51-ab55-63a8264bd412
+// (AI Studio / named DB). Rules pasted only under "(default)" in the console do NOT apply to this app.
 service cloud.firestore {
   match /databases/{database}/documents {
     // ===============================================================
@@ -58,29 +60,50 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    // Safe read: accessing .data when the doc is missing breaks rule evaluation.
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     function isTeacher() {
-      return isAuthenticated() && getUserData().role == 'teacher';
+      return isAuthenticated() && userDoc().exists && userDoc().data.role == 'teacher';
     }
 
     function isStudent() {
-      return isAuthenticated() && getUserData().role == 'student';
+      return isAuthenticated() && userDoc().exists && userDoc().data.role == 'student';
     }
 
     function isAdmin() {
       return isAuthenticated() && (
-        getUserData().role == 'admin' ||
+        (userDoc().exists && userDoc().data.role == 'admin') ||
         (request.auth.token.email == "Manyavr30@gmail.com" && request.auth.token.email_verified == true)
       );
+    }
+
+    // Join class: only studentIds changes, all previous IDs kept, exactly one new ID (must be caller).
+    // Matches Firestore arrayUnion(self) without needing users/{uid} for isStudent().
+    function isJoiningClassByCode() {
+      let oldIds = resource.data.studentIds;
+      let newIds = request.resource.data.studentIds;
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['studentIds'])
+        && newIds.hasAll(oldIds)
+        && newIds.size() == oldIds.size() + 1
+        && request.auth.uid in newIds
+        && !(request.auth.uid in oldIds);
     }
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role']) &&
              data.uid == request.auth.uid &&
              data.role in ['teacher', 'student'];
+    }
+
+    // Assessments store classId, not teacherId — use class to resolve the teacher.
+    function isTeacherOfAssessment(assessmentId) {
+      let a = get(/databases/$(database)/documents/assessments/$(assessmentId));
+      return a.exists
+        && get(/databases/$(database)/documents/classes/$(a.data.classId)).exists
+        && get(/databases/$(database)/documents/classes/$(a.data.classId)).data.teacherId == request.auth.uid;
     }
 
     // ===============================================================
@@ -90,18 +113,17 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role;
+      // Allow role changes so login can set teacher vs student (setDoc after Google sign-in).
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
     }
 
     match /classes/{classId} {
-      allow read: if isAuthenticated() && (
-        request.auth.uid == resource.data.teacherId ||
-        request.auth.uid in resource.data.studentIds
-      );
+      // Any signed-in user may read (needed to query by inviteCode before the student is in studentIds).
+      allow read: if isAuthenticated();
       allow create: if isTeacher();
       allow update: if isAuthenticated() && (
         request.auth.uid == resource.data.teacherId ||
-        (isStudent() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['studentIds']))
+        isJoiningClassByCode()
       );
       allow delete: if isAuthenticated() && request.auth.uid == resource.data.teacherId;
     }
@@ -114,15 +136,17 @@ service cloud.firestore {
     }
 
     match /submissions/{submissionId} {
-      allow read: if isAuthenticated() && (
-        request.auth.uid == resource.data.studentId ||
-        request.auth.uid == get(/databases/$(database)/documents/assessments/$(resource.data.assessmentId)).data.teacherId ||
-        isTeacher() // Broad check for teacher role if needed
-      );
-      allow create: if isStudent();
+      // Reads: any signed-in user (POC). Rules using get()/isTeacher() break Firestore *list*
+      // queries (Missing permission). The app only queries by assessmentId / studentId.
+      // Tighten for production (e.g. Cloud Function or denormalized fields + matching where).
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated()
+        && request.resource.data.studentId == request.auth.uid
+        && request.resource.data.status == 'pending';
       allow update: if isAuthenticated() && (
-        (isStudent() && request.auth.uid == resource.data.studentId && resource.data.status == 'pending') ||
-        isTeacher()
+        (request.auth.uid == resource.data.studentId && resource.data.status == 'pending') ||
+        request.auth.uid == resource.data.teacherId ||
+        isTeacherOfAssessment(resource.data.assessmentId)
       );
     }
   }

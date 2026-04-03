@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { FileText, Send, CheckCircle, Clock, ArrowLeft, Users, ChevronRight, AlertCircle, Sparkles } from 'lucide-react';
-import { collection, query, where, onSnapshot, doc, getDoc, addDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, query, where, onSnapshot, doc, getDoc, addDoc, updateDoc, DocumentReference } from 'firebase/firestore';
+import { db, FIRESTORE_DATABASE_ID } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Assessment, Submission } from '../types';
 import { gradeSubmission } from '../services/aiService';
+import { AI_GRADING_PLACEHOLDER } from '../constants/submission';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function AssessmentDetail() {
   const { assessmentId } = useParams();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -18,65 +19,154 @@ export default function AssessmentDetail() {
   const [content, setContent] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [studentNames, setStudentNames] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!assessmentId) return;
+    if (authLoading) return;
+
+    if (!user) {
+      setLoading(false);
+      navigate('/dashboard');
+      return;
+    }
+
+    setLoadError(null);
 
     const assessmentRef = doc(db, 'assessments', assessmentId);
-    const unsubscribeAssessment = onSnapshot(assessmentRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setAssessment({ id: docSnap.id, ...docSnap.data() } as Assessment);
-      } else {
-        navigate('/dashboard');
-      }
-    });
-
-    if (user?.role === 'teacher') {
-      const q = query(collection(db, 'submissions'), where('assessmentId', '==', assessmentId));
-      const unsubscribeSubmissions = onSnapshot(q, (snapshot) => {
-        setSubmissions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Submission)));
+    const unsubscribeAssessment = onSnapshot(
+      assessmentRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setAssessment({ id: docSnap.id, ...docSnap.data() } as Assessment);
+        } else {
+          navigate('/dashboard');
+        }
+      },
+      (err) => {
+        console.error('Assessment snapshot error:', err);
+        setLoadError(`[Assessment doc] ${err.message}`);
         setLoading(false);
-      });
-      return () => { unsubscribeAssessment(); unsubscribeSubmissions(); };
-    } else if (user?.role === 'student') {
-      const q = query(collection(db, 'submissions'), 
+      }
+    );
+
+    const endLoading = (err?: Error) => {
+      if (err) {
+        console.error('Submissions snapshot error:', err);
+        setLoadError(`[Submissions query] ${err.message}`);
+      }
+      setLoading(false);
+    };
+
+    if (user.role === 'teacher') {
+      // Single-field query so older submissions without teacherId still appear; filter below.
+      const q = query(collection(db, 'submissions'), where('assessmentId', '==', assessmentId));
+      const unsubscribeSubmissions = onSnapshot(
+        q,
+        (snapshot) => {
+          const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Submission));
+          const mine = rows.filter((s) => !s.teacherId || s.teacherId === user.uid);
+          setSubmissions(mine);
+          setLoading(false);
+        },
+        (err) => endLoading(err)
+      );
+      return () => {
+        unsubscribeAssessment();
+        unsubscribeSubmissions();
+      };
+    }
+
+    if (user.role === 'student') {
+      const q = query(
+        collection(db, 'submissions'),
         where('assessmentId', '==', assessmentId),
         where('studentId', '==', user.uid)
       );
-      const unsubscribeMySub = onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-          setMySubmission({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Submission);
-        }
-        setLoading(false);
-      });
-      return () => { unsubscribeAssessment(); unsubscribeMySub(); };
+      const unsubscribeMySub = onSnapshot(
+        q,
+        (snapshot) => {
+          if (!snapshot.empty) {
+            setMySubmission({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Submission);
+          }
+          setLoading(false);
+        },
+        (err) => endLoading(err)
+      );
+      return () => {
+        unsubscribeAssessment();
+        unsubscribeMySub();
+      };
     }
-  }, [assessmentId, user, navigate]);
+
+    setLoading(false);
+    return () => unsubscribeAssessment();
+  }, [assessmentId, user, navigate, authLoading]);
+
+  useEffect(() => {
+    if (user?.role !== 'teacher' || submissions.length === 0) return;
+    const ids = [...new Set(submissions.map((s) => s.studentId))];
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        ids.map(async (uid) => {
+          try {
+            const snap = await getDoc(doc(db, 'users', uid));
+            if (snap.exists()) {
+              const d = snap.data() as { displayName?: string; email?: string };
+              const label = (d.displayName && d.displayName.trim()) || d.email || uid;
+              return [uid, label] as const;
+            }
+          } catch {
+            /* ignore */
+          }
+          return [uid, `Student (${uid.slice(0, 6)}…)`] as const;
+        })
+      );
+      if (!cancelled) setStudentNames(Object.fromEntries(entries));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [submissions, user?.role]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !assessment || !content.trim()) return;
 
     setIsSubmitting(true);
+    let submissionRef: DocumentReference | null = null;
     try {
+      let teacherId = assessment.teacherId;
+      if (!teacherId && assessment.classId) {
+        const clsSnap = await getDoc(doc(db, 'classes', assessment.classId));
+        teacherId = (clsSnap.data()?.teacherId as string) || '';
+      }
+      if (!teacherId) {
+        alert('Could not resolve this class’s teacher. Your teacher may need to re-save the assessment.');
+        setIsSubmitting(false);
+        return;
+      }
       // 1. Create initial submission
       const submissionData = {
         assessmentId: assessment.id,
+        teacherId,
         studentId: user.uid,
         content,
         status: 'pending',
         submittedAt: new Date().toISOString(),
         score: 0,
-        feedback: 'AI is grading your submission...'
+        feedback: AI_GRADING_PLACEHOLDER
       };
 
-      const docRef = await addDoc(collection(db, 'submissions'), submissionData);
+      submissionRef = await addDoc(collection(db, 'submissions'), submissionData);
 
       // 2. Trigger AI Grading
       const aiResult = await gradeSubmission(assessment, content);
 
       // 3. Update submission with AI result
-      await updateDoc(doc(db, 'submissions', docRef.id), {
+      await updateDoc(submissionRef, {
         score: aiResult.score,
         feedback: aiResult.feedback,
         status: 'graded',
@@ -86,13 +176,51 @@ export default function AssessmentDetail() {
       setContent('');
     } catch (error) {
       console.error("Submission Error:", error);
-      alert("Failed to submit. Please try again.");
+      const message =
+        error instanceof Error ? error.message : "Something went wrong. Please try again.";
+      alert(`Failed to submit: ${message}`);
+      if (submissionRef) {
+        try {
+          await updateDoc(submissionRef, {
+            status: 'graded',
+            score: 0,
+            feedback: `Automatic grading did not complete (${message}). Your teacher can review and score this submission manually.`,
+          });
+        } catch (e) {
+          console.error("Could not write submission error state:", e);
+        }
+      }
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64">Loading assessment...</div>;
+  if (authLoading || loading) {
+    return <div className="flex items-center justify-center h-64">Loading assessment...</div>;
+  }
+  if (loadError) {
+    return (
+      <div className="max-w-lg mx-auto mt-12 p-6 bg-red-50 border border-red-100 rounded-2xl text-red-800">
+        <p className="font-bold mb-2">Could not load this assessment</p>
+        <p className="text-sm mb-4">{loadError}</p>
+        <p className="text-xs text-red-600 leading-relaxed">
+          This app uses the named Firestore database <code className="bg-red-100 px-1 rounded">{FIRESTORE_DATABASE_ID}</code>.
+          Rules must be published to <strong>that</strong> database (Firebase console → Firestore → database dropdown → pick this ID, then Rules), not only to &quot;(default)&quot;.
+          If you use the CLI: <code className="bg-red-100 px-1 rounded">firebase deploy --only firestore:rules</code> with this repo&apos;s <code className="bg-red-100 px-1 rounded">firebase.json</code> (it targets the named DB).
+        </p>
+        <p className="text-xs text-red-600 mt-2">
+          If the error mentions an index, use the link in the browser devtools console to create it.
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate('/dashboard')}
+          className="mt-4 text-sm font-bold text-indigo-600 hover:underline"
+        >
+          Back to dashboard
+        </button>
+      </div>
+    );
+  }
   if (!assessment) return null;
 
   return (
@@ -227,7 +355,9 @@ export default function AssessmentDetail() {
                           {sub.status === 'graded' ? sub.score : '?'}
                         </div>
                         <div>
-                          <h4 className="font-bold text-gray-900">Student ID: {sub.studentId.substring(0, 8)}...</h4>
+                          <h4 className="font-bold text-gray-900">
+                            {studentNames[sub.studentId] ?? `Student (${sub.studentId.slice(0, 6)}…)`}
+                          </h4>
                           <p className="text-xs text-gray-500">Submitted {new Date(sub.submittedAt).toLocaleString()}</p>
                         </div>
                       </div>
