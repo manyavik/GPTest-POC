@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(true);
   const [joining, setJoining] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -45,9 +46,20 @@ export default function Dashboard() {
       inviteCode: Math.random().toString(36).substring(2, 8).toUpperCase(),
     };
 
-    await addDoc(collection(db, 'classes'), newClass);
-    setNewClassName('');
-    setShowCreateModal(false);
+    setCreating(true);
+    try {
+      await addDoc(collection(db, 'classes'), newClass);
+      setNewClassName('');
+      setShowCreateModal(false);
+    } catch (err) {
+      console.error('Create class failed:', err);
+      const msg = err instanceof Error ? err.message : 'Could not create class.';
+      alert(
+        `${msg}\n\nIf this says permission denied: deploy the latest firestore.rules to your named Firestore database, or ask the repo owner.`
+      );
+    } finally {
+      setCreating(false);
+    }
   };
 
   const handleJoinClass = async (e: React.FormEvent) => {
@@ -216,10 +228,10 @@ export default function Dashboard() {
                   </button>
                   <button
                     type="submit"
-                    disabled={!showCreateModal && joining}
+                    disabled={(showCreateModal && creating) || (!showCreateModal && joining)}
                     className="flex-1 py-3 px-6 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    {showCreateModal ? 'Create' : joining ? 'Joining…' : 'Join'}
+                    {showCreateModal ? (creating ? 'Creating…' : 'Create') : joining ? 'Joining…' : 'Join'}
                   </button>
                 </div>
               </form>

@@ -106,6 +106,12 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/classes/$(a.data.classId)).data.teacherId == request.auth.uid;
     }
 
+    // Class owner by classId (avoids isTeacher() which needs users/{uid}.role — often missing for collaborators).
+    function isTeacherOfClassId(classId) {
+      let c = get(/databases/$(database)/documents/classes/$(classId));
+      return c.exists && c.data.teacherId == request.auth.uid;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================

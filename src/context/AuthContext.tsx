@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
@@ -15,38 +15,42 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  /** Ignore stale profile updates while setRole is writing users/{uid}. */
+  const profileWriteLock = useRef(false);
 
   useEffect(() => {
-    console.log("AuthProvider: Initializing auth listener");
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      console.log("AuthProvider: Auth state changed", firebaseUser?.email);
       if (firebaseUser) {
         try {
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          const userRef = doc(db, 'users', firebaseUser.uid);
+          let userDoc = await getDoc(userRef);
+          if (!userDoc.exists()) {
+            userDoc = await getDoc(userRef);
+          }
+          if (profileWriteLock.current) {
+            setLoading(false);
+            return;
+          }
           if (userDoc.exists()) {
-            console.log("AuthProvider: User doc found", userDoc.data());
             setUser(userDoc.data() as User);
           } else {
-            console.log("AuthProvider: User doc not found, creating default");
-            const defaultUser: User = {
+            setUser({
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
               displayName: firebaseUser.displayName || '',
-              role: 'student', // Default role
-            };
-            // Persist so Firestore rules (e.g. isStudent() on class join) see users/{uid}.
-            await setDoc(doc(db, 'users', firebaseUser.uid), defaultUser);
-            setUser(defaultUser);
+              role: 'student',
+            });
           }
         } catch (error) {
-          console.error("AuthProvider: Error fetching user doc", error);
-          // Fallback to basic user info if Firestore fails
-          setUser({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || '',
-            displayName: firebaseUser.displayName || '',
-            role: 'student',
-          } as User);
+          console.error('AuthProvider: Error fetching user doc', error);
+          if (!profileWriteLock.current) {
+            setUser({
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              displayName: firebaseUser.displayName || '',
+              role: 'student',
+            } as User);
+          }
         }
       } else {
         setUser(null);
@@ -57,38 +61,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return unsubscribe;
   }, []);
 
-  // If client state has a user but Firestore has no profile (e.g. older sessions), sync so rules like isStudent() work.
-  useEffect(() => {
-    if (!user?.uid) return;
-    const ref = doc(db, 'users', user.uid);
-    getDoc(ref)
-      .then(async (snap) => {
-        if (!snap.exists()) {
-          await setDoc(ref, user);
-        }
-      })
-      .catch((e) => console.error('AuthProvider: ensure user doc', e));
-  }, [user?.uid]);
-
   const setRole = async (role: 'teacher' | 'student') => {
     if (!auth.currentUser) {
-      console.error("setRole: No current user");
+      console.error('setRole: No current user');
       return;
     }
-    console.log("setRole: Setting role to", role);
     const userData: User = {
       uid: auth.currentUser.uid,
       email: auth.currentUser.email || '',
       displayName: auth.currentUser.displayName || '',
       role,
     };
+    profileWriteLock.current = true;
     try {
       await setDoc(doc(db, 'users', auth.currentUser.uid), userData);
       setUser(userData);
-      console.log("setRole: Role set successfully");
     } catch (error) {
-      console.error("setRole: Error saving role", error);
+      console.error('setRole: Error saving role', error);
       throw error;
+    } finally {
+      profileWriteLock.current = false;
     }
   };
 
