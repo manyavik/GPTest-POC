@@ -42,8 +42,10 @@ service cloud.firestore {
     //   - assessmentId: string (required)
     //   - studentId: string (required)
     //   - content: string (required)
-    //   - score: number
-    //   - feedback: string
+    //   - score: number (current / teacher-final)
+    //   - feedback: string (current / teacher-final)
+    //   - aiScore, aiFeedback: snapshot when AI graded (immutable after set)
+    //   - teacherRevisedAt: optional ISO string when teacher saves a revision
     //   - status: string (required, 'pending', 'graded', 'revised')
     //   - submittedAt: timestamp
     //
@@ -78,6 +80,14 @@ service cloud.firestore {
         (userDoc().exists && userDoc().data.role == 'admin') ||
         (request.auth.token.email == "Manyavr30@gmail.com" && request.auth.token.email_verified == true)
       );
+    }
+
+    // Once set by AI grading, aiScore / aiFeedback must not change (teacher revisions only touch score, feedback, status).
+    function preservesSubmissionAiSnapshot() {
+      return (!resource.data.keys().hasAll(['aiFeedback'])
+          || request.resource.data.aiFeedback == resource.data.aiFeedback)
+        && (!resource.data.keys().hasAll(['aiScore'])
+          || request.resource.data.aiScore == resource.data.aiScore);
     }
 
     // Join class: only studentIds changes, all previous IDs kept, exactly one new ID (must be caller).
@@ -149,7 +159,9 @@ service cloud.firestore {
       allow create: if isAuthenticated()
         && request.resource.data.studentId == request.auth.uid
         && request.resource.data.status == 'pending';
-      allow update: if isAuthenticated() && (
+      allow update: if isAuthenticated()
+        && preservesSubmissionAiSnapshot()
+        && (
         (request.auth.uid == resource.data.studentId && resource.data.status == 'pending') ||
         request.auth.uid == resource.data.teacherId ||
         isTeacherOfAssessment(resource.data.assessmentId)

@@ -14,6 +14,8 @@ export interface Class {
   inviteCode: string;
 }
 
+export type RubricMode = 'default' | 'custom';
+
 export interface RubricCriterion {
   name: string;
   description: string;
@@ -21,7 +23,11 @@ export interface RubricCriterion {
 }
 
 export interface Rubric {
-  criteria: RubricCriterion[];
+  /** How AI grading should use the rubric. Older assessments omit this and are treated as custom if they have criteria. */
+  mode?: RubricMode;
+  /** Maximum score (holistic cap for default; should equal sum of criterion maxPoints for custom). */
+  totalPoints?: number;
+  criteria?: RubricCriterion[];
 }
 
 export interface Assessment {
@@ -47,4 +53,9 @@ export interface Submission {
   status: 'pending' | 'graded' | 'revised';
   submittedAt: string;
   aiRawResponse?: string;
+  /** Snapshot of AI output at grade time; unchanged when teacher revises (research / comparison). */
+  aiScore?: number;
+  aiFeedback?: string;
+  /** Set when a teacher saves a revision over AI output. */
+  teacherRevisedAt?: string;
 }

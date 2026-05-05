@@ -68,7 +68,10 @@
         "feedback": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "graded", "revised"] },
         "submittedAt": { "type": "string", "format": "date-time" },
-        "aiRawResponse": { "type": "string" }
+        "aiRawResponse": { "type": "string" },
+        "aiScore": { "type": "number", "description": "AI score at grade time; immutable after set." },
+        "aiFeedback": { "type": "string", "description": "AI feedback at grade time; immutable after set." },
+        "teacherRevisedAt": { "type": "string", "format": "date-time", "description": "When teacher saved a revision." }
       },
       "required": ["assessmentId", "studentId", "content", "status"]
     }

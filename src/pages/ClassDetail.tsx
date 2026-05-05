@@ -1,10 +1,27 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Plus, Calendar, FileText, ChevronRight, Users, Settings, ArrowLeft, Trash2 } from 'lucide-react';
+import {
+  Plus,
+  Calendar,
+  FileText,
+  ChevronRight,
+  Users,
+  ArrowLeft,
+  Trash2,
+  Sparkles,
+  ListChecks,
+  Info,
+} from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Class, Assessment } from '../types';
+import {
+  allocatedPoints,
+  customCriteriaToRubric,
+  formatRubricSummary,
+  type CustomCriterionDraft,
+} from '../utils/rubric';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function ClassDetail() {
@@ -20,6 +37,36 @@ export default function ClassDetail() {
   const [newTitle, setNewTitle] = useState('');
   const [newPrompt, setNewPrompt] = useState('');
   const [newDueDate, setNewDueDate] = useState('');
+  const [rubricMode, setRubricMode] = useState<'default' | 'custom'>('default');
+  const [rubricTotalPoints, setRubricTotalPoints] = useState(10);
+  const [customCriteria, setCustomCriteria] = useState<CustomCriterionDraft[]>([]);
+
+  const resetAssessmentForm = () => {
+    setNewTitle('');
+    setNewPrompt('');
+    setNewDueDate('');
+    setRubricMode('default');
+    setRubricTotalPoints(10);
+    setCustomCriteria([]);
+  };
+
+  const addCustomRow = () => {
+    setCustomCriteria((rows) => [...rows, { maxPoints: 1, name: '', description: '' }]);
+  };
+
+  const removeCustomRow = (index: number) => {
+    setCustomCriteria((rows) => rows.filter((_, i) => i !== index));
+  };
+
+  const updateCustomRow = (index: number, patch: Partial<CustomCriterionDraft>) => {
+    setCustomCriteria((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  };
+
+  const customAllocated = allocatedPoints(customCriteria);
+  const customRowsValid =
+    customCriteria.length > 0 &&
+    customCriteria.every((r) => r.name.trim().length > 0 && r.maxPoints > 0);
+  const customBalanced = customAllocated === rubricTotalPoints && rubricTotalPoints > 0;
 
   useEffect(() => {
     if (!classId) return;
@@ -47,27 +94,38 @@ export default function ClassDetail() {
 
   const handleCreateAssessment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!classId || !newTitle.trim()) return;
+    if (!classId || !newTitle.trim() || !user) return;
+
+    if (rubricMode === 'default' && rubricTotalPoints < 1) return;
+
+    if (rubricMode === 'custom') {
+      if (!customBalanced || !customRowsValid) return;
+    }
+
+    const rubric =
+      rubricMode === 'default'
+        ? {
+            mode: 'default' as const,
+            totalPoints: rubricTotalPoints,
+            criteria: [] as { name: string; description: string; maxPoints: number }[],
+          }
+        : {
+            mode: 'custom' as const,
+            totalPoints: rubricTotalPoints,
+            criteria: customCriteriaToRubric(rubricTotalPoints, customCriteria),
+          };
 
     const newAssessment = {
       classId,
       teacherId: user.uid,
-      title: newTitle,
+      title: newTitle.trim(),
       prompt: newPrompt,
       dueDate: newDueDate,
-      rubric: {
-        criteria: [
-          { name: 'Clarity', description: 'Clear and concise expression of ideas.', maxPoints: 10 },
-          { name: 'Accuracy', description: 'Factual correctness and relevance.', maxPoints: 10 },
-          { name: 'Structure', description: 'Logical flow and organization.', maxPoints: 10 }
-        ]
-      }
+      rubric,
     };
 
     await addDoc(collection(db, 'assessments'), newAssessment);
-    setNewTitle('');
-    setNewPrompt('');
-    setNewDueDate('');
+    resetAssessmentForm();
     setShowCreateAssessment(false);
   };
 
@@ -127,11 +185,12 @@ export default function ClassDetail() {
                 </div>
                 <div>
                   <h3 className="font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">{assessment.title}</h3>
-                  <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
+                  <div className="flex flex-col gap-1 text-sm text-gray-500 mt-1">
                     <span className="flex items-center gap-1">
                       <Calendar className="w-4 h-4" />
                       Due: {assessment.dueDate ? new Date(assessment.dueDate).toLocaleDateString() : 'No deadline'}
                     </span>
+                    <span className="text-xs text-indigo-600/90 font-medium">{formatRubricSummary(assessment)}</span>
                   </div>
                 </div>
               </div>
@@ -166,7 +225,10 @@ export default function ClassDetail() {
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl overflow-y-auto max-h-[90vh]"
             >
-              <h2 className="text-2xl font-bold mb-6">Create New Assessment</h2>
+              <h2 className="text-2xl font-bold mb-2">Create New Assessment</h2>
+              <p className="text-sm text-gray-500 mb-6">
+                Set the prompt, then choose how AI should score work: holistic (default) or your own point-by-point rubric.
+              </p>
               <form onSubmit={handleCreateAssessment} className="space-y-6">
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-2">Title</label>
@@ -176,7 +238,7 @@ export default function ClassDetail() {
                     value={newTitle}
                     onChange={(e) => setNewTitle(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="e.g. Essay on Climate Change"
+                    placeholder="e.g. Proof by induction problem set"
                   />
                 </div>
                 <div>
@@ -199,25 +261,200 @@ export default function ClassDetail() {
                     className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
-                <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
-                  <h4 className="font-bold text-indigo-700 mb-2 flex items-center gap-2">
-                    <Settings className="w-4 h-4" /> Default Rubric Applied
-                  </h4>
-                  <p className="text-sm text-indigo-600">
-                    Assessments are automatically graded on Clarity, Accuracy, and Structure (10pts each). You can customize these later.
+
+                <div className="space-y-3">
+                  <label className="block text-sm font-bold text-gray-700">Grading rubric</label>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    All AI scores are expressed in points. Students see feedback tied to the option you pick below.
                   </p>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRubricMode('default')}
+                      className={`text-left p-4 rounded-2xl border-2 transition-all ${
+                        rubricMode === 'default'
+                          ? 'border-indigo-500 bg-indigo-50/80 shadow-sm'
+                          : 'border-gray-100 bg-gray-50/50 hover:border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold text-gray-900 mb-1">
+                        <Sparkles className="w-4 h-4 text-indigo-600" />
+                        Default (holistic)
+                      </div>
+                      <p className="text-xs text-gray-600 leading-relaxed">
+                        AI judges overall quality against your prompt only—no categories. You set the point maximum.
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRubricMode('custom')}
+                      className={`text-left p-4 rounded-2xl border-2 transition-all ${
+                        rubricMode === 'custom'
+                          ? 'border-indigo-500 bg-indigo-50/80 shadow-sm'
+                          : 'border-gray-100 bg-gray-50/50 hover:border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold text-gray-900 mb-1">
+                        <ListChecks className="w-4 h-4 text-indigo-600" />
+                        Custom rubric
+                      </div>
+                      <p className="text-xs text-gray-600 leading-relaxed">
+                        You define point buckets (e.g. 3 pts “base case”) and what each means for this class.
+                      </p>
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-3 pt-4">
+
+                {rubricMode === 'default' ? (
+                  <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5 space-y-3">
+                    <div className="flex gap-2 text-sm text-indigo-900">
+                      <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                      <p className="leading-relaxed">
+                        The model assigns one score from <strong>0</strong> up to your maximum, using its own judgment—no
+                        fixed checklist. Use the prompt above to spell out what “excellent” looks like.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-2">Total points for this assignment</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        required
+                        value={rubricTotalPoints}
+                        onChange={(e) => setRubricTotalPoints(Math.max(1, Number(e.target.value) || 1))}
+                        className="w-32 px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-indigo-700"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-gray-200 bg-gray-50/40 p-5 space-y-4">
+                    <div className="flex flex-wrap items-end gap-4">
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-2">Total points (must match rubric sum)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={1000}
+                          required
+                          value={rubricTotalPoints}
+                          onChange={(e) => setRubricTotalPoints(Math.max(1, Number(e.target.value) || 1))}
+                          className="w-32 px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-indigo-700"
+                        />
+                      </div>
+                      <div
+                        className={`text-sm font-bold px-3 py-2 rounded-xl ${
+                          customBalanced && customRowsValid
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-amber-100 text-amber-900'
+                        }`}
+                      >
+                        Allocated: {customAllocated} / {rubricTotalPoints} pts
+                        {customBalanced && customRowsValid ? ' ✓' : ''}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-600 leading-relaxed flex gap-2">
+                      <Info className="w-4 h-4 shrink-0 text-gray-400" />
+                      Add one row per rubric item. Enter how many points it is worth, a short name, and what you expect
+                      (so the AI can match your preferences). Point values across all rows must add up exactly to the
+                      total.
+                    </p>
+
+                    <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-1">
+                      {customCriteria.map((row, index) => (
+                        <div
+                          key={index}
+                          className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm space-y-3"
+                        >
+                          <div className="flex flex-wrap gap-3 items-start">
+                            <div className="w-24">
+                              <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">
+                                Points
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={rubricTotalPoints}
+                                value={row.maxPoints || ''}
+                                onChange={(e) =>
+                                  updateCustomRow(index, { maxPoints: Math.max(0, Number(e.target.value) || 0) })
+                                }
+                                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-center font-bold"
+                              />
+                            </div>
+                            <div className="flex-1 min-w-[140px]">
+                              <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">
+                                Criterion name
+                              </label>
+                              <input
+                                type="text"
+                                value={row.name}
+                                onChange={(e) => updateCustomRow(index, { name: e.target.value })}
+                                placeholder="e.g. Base case"
+                                className="w-full px-3 py-2 rounded-lg border border-gray-200"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeCustomRow(index)}
+                              className="p-2 mt-5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors"
+                              aria-label="Remove criterion"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">
+                              What this means (for this assignment)
+                            </label>
+                            <textarea
+                              value={row.description}
+                              onChange={(e) => updateCustomRow(index, { description: e.target.value })}
+                              rows={2}
+                              placeholder="Describe what earns full vs partial credit here…"
+                              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={addCustomRow}
+                      className="w-full py-3 rounded-xl border-2 border-dashed border-indigo-200 text-indigo-600 font-bold text-sm hover:bg-indigo-50/50 transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add rubric row
+                    </button>
+
+                    {rubricMode === 'custom' && customCriteria.length > 0 && (!customRowsValid || !customBalanced) && (
+                      <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                        {!customRowsValid
+                          ? 'Each row needs a name and at least 1 point.'
+                          : `Point totals must match: currently ${customAllocated} vs ${rubricTotalPoints} required.`}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowCreateAssessment(false)}
+                    onClick={() => {
+                      setShowCreateAssessment(false);
+                      resetAssessmentForm();
+                    }}
                     className="flex-1 py-3 px-6 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 py-3 px-6 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100"
+                    disabled={
+                      rubricMode === 'custom' && (!customBalanced || !customRowsValid)
+                    }
+                    className="flex-1 py-3 px-6 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Create Assessment
                   </button>

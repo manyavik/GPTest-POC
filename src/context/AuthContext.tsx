@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { auth, db, getAuthRedirectResultOnce } from '../firebase';
 import { User } from '../types';
 
 interface AuthContextType {
@@ -12,6 +12,10 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+/** Session keys for Google redirect sign-in (popup often hangs after account pick in strict browsers). */
+export const AUTH_PENDING_ROLE_KEY = 'authPendingRole';
+export const AUTH_POST_LOGIN_NAV_KEY = 'authPostLoginNavigate';
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -19,46 +23,87 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const profileWriteLock = useRef(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        try {
-          const userRef = doc(db, 'users', firebaseUser.uid);
-          let userDoc = await getDoc(userRef);
-          if (!userDoc.exists()) {
-            userDoc = await getDoc(userRef);
-          }
-          if (profileWriteLock.current) {
-            setLoading(false);
-            return;
-          }
-          if (userDoc.exists()) {
-            setUser(userDoc.data() as User);
-          } else {
-            setUser({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email || '',
-              displayName: firebaseUser.displayName || '',
-              role: 'student',
-            });
-          }
-        } catch (error) {
-          console.error('AuthProvider: Error fetching user doc', error);
-          if (!profileWriteLock.current) {
-            setUser({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email || '',
-              displayName: firebaseUser.displayName || '',
-              role: 'student',
-            } as User);
+    let mounted = true;
+    let unsubscribe: (() => void) | undefined;
+
+    (async () => {
+      try {
+        const result = await getAuthRedirectResultOnce();
+        if (!mounted) return;
+
+        if (result?.user) {
+          const pending = sessionStorage.getItem(AUTH_PENDING_ROLE_KEY);
+          if (pending === 'teacher' || pending === 'student') {
+            sessionStorage.removeItem(AUTH_PENDING_ROLE_KEY);
+            profileWriteLock.current = true;
+            try {
+              const userData: User = {
+                uid: result.user.uid,
+                email: result.user.email || '',
+                displayName: result.user.displayName || '',
+                role: pending,
+              };
+              await setDoc(doc(db, 'users', result.user.uid), userData);
+              if (!mounted) return;
+              setUser(userData);
+              sessionStorage.setItem(AUTH_POST_LOGIN_NAV_KEY, '/dashboard');
+            } catch (error) {
+              console.error('AuthProvider: redirect sign-in could not save profile', error);
+            } finally {
+              profileWriteLock.current = false;
+            }
           }
         }
-      } else {
-        setUser(null);
+      } catch (error) {
+        console.error('AuthProvider: getRedirectResult', error);
       }
-      setLoading(false);
-    });
 
-    return unsubscribe;
+      if (!mounted) return;
+
+      unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+          try {
+            const userRef = doc(db, 'users', firebaseUser.uid);
+            let userDoc = await getDoc(userRef);
+            if (!userDoc.exists()) {
+              userDoc = await getDoc(userRef);
+            }
+            if (profileWriteLock.current) {
+              setLoading(false);
+              return;
+            }
+            if (userDoc.exists()) {
+              setUser(userDoc.data() as User);
+            } else {
+              setUser({
+                uid: firebaseUser.uid,
+                email: firebaseUser.email || '',
+                displayName: firebaseUser.displayName || '',
+                role: 'student',
+              });
+            }
+          } catch (error) {
+            console.error('AuthProvider: Error fetching user doc', error);
+            if (!profileWriteLock.current) {
+              setUser({
+                uid: firebaseUser.uid,
+                email: firebaseUser.email || '',
+                displayName: firebaseUser.displayName || '',
+                role: 'student',
+              } as User);
+            }
+          }
+        } else {
+          setUser(null);
+        }
+        setLoading(false);
+      });
+    })();
+
+    return () => {
+      mounted = false;
+      unsubscribe?.();
+    };
   }, []);
 
   const setRole = async (role: 'teacher' | 'student') => {

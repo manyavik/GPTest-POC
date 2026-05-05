@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getAuth, getRedirectResult, GoogleAuthProvider, signOut, type UserCredential } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, getDocs, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -9,6 +9,16 @@ export const FIRESTORE_DATABASE_ID = firebaseConfig.firestoreDatabaseId;
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+let authRedirectResultPromise: Promise<UserCredential | null> | null = null;
+
+/** One getRedirectResult per page load — React Strict Mode runs effects twice in dev. */
+export function getAuthRedirectResultOnce(): Promise<UserCredential | null> {
+  if (authRedirectResultPromise === null) {
+    authRedirectResultPromise = getRedirectResult(auth);
+  }
+  return authRedirectResultPromise;
+}
 
 export enum OperationType {
   CREATE = 'create',

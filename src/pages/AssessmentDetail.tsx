@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { FileText, Send, CheckCircle, Clock, ArrowLeft, Users, ChevronRight, AlertCircle, Sparkles } from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, getDoc, addDoc, updateDoc, DocumentReference } from 'firebase/firestore';
-import { db, FIRESTORE_DATABASE_ID } from '../firebase';
+import { auth, db, FIRESTORE_DATABASE_ID } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Assessment, Submission } from '../types';
-import { gradeSubmission } from '../services/aiService';
 import { AI_GRADING_PLACEHOLDER } from '../constants/submission';
 import { motion, AnimatePresence } from 'motion/react';
+import { AssessmentRubricPanel } from '../components/AssessmentRubricPanel';
 
 export default function AssessmentDetail() {
   const { assessmentId } = useParams();
@@ -162,16 +162,30 @@ export default function AssessmentDetail() {
 
       submissionRef = await addDoc(collection(db, 'submissions'), submissionData);
 
-      // 2. Trigger AI Grading
-      const aiResult = await gradeSubmission(assessment, content);
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) {
+        throw new Error('Your session expired. Sign in again and resubmit if needed.');
+      }
 
-      // 3. Update submission with AI result
-      await updateDoc(submissionRef, {
-        score: aiResult.score,
-        feedback: aiResult.feedback,
-        status: 'graded',
-        aiRawResponse: JSON.stringify(aiResult)
+      const gradeRes = await fetch('/api/submissions/complete-grade', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ submissionId: submissionRef.id }),
       });
+
+      if (!gradeRes.ok) {
+        let detail = `HTTP ${gradeRes.status}`;
+        try {
+          const errBody = (await gradeRes.json()) as { error?: string };
+          if (errBody?.error) detail = errBody.error;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
 
       setContent('');
     } catch (error) {
@@ -320,7 +334,7 @@ export default function AssessmentDetail() {
                     )}
                   </button>
                   <p className="text-center text-xs text-gray-400">
-                    Your submission will be instantly graded by Gemini AI based on the rubric.
+                    Your submission is graded on the server—you can leave this page once it is sent.
                   </p>
                 </form>
               )}
@@ -374,23 +388,7 @@ export default function AssessmentDetail() {
 
         {/* Sidebar: Rubric */}
         <div className="space-y-6">
-          <section className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
-            <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-indigo-600" />
-              Grading Rubric
-            </h3>
-            <div className="space-y-4">
-              {assessment.rubric.criteria.map((c, i) => (
-                <div key={i} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="font-bold text-sm text-gray-900">{c.name}</span>
-                    <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">Max {c.maxPoints}</span>
-                  </div>
-                  <p className="text-xs text-gray-500 leading-relaxed">{c.description}</p>
-                </div>
-              ))}
-            </div>
-          </section>
+          <AssessmentRubricPanel assessment={assessment} heading="Grading rubric" />
 
           <section className="bg-indigo-600 text-white rounded-3xl p-6 shadow-xl shadow-indigo-100">
             <h3 className="font-bold mb-2 flex items-center gap-2">

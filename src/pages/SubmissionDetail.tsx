@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { CheckCircle, Sparkles, User, ArrowLeft, Save, Edit3, AlertTriangle } from 'lucide-react';
+import { Sparkles, User, ArrowLeft, Save, Edit3, AlertTriangle } from 'lucide-react';
 import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
 import { AI_GRADING_PLACEHOLDER } from '../constants/submission';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Submission, Assessment } from '../types';
 import { motion } from 'motion/react';
+import { AssessmentRubricPanel } from '../components/AssessmentRubricPanel';
 
 export default function SubmissionDetail() {
   const { submissionId } = useParams();
@@ -22,6 +23,11 @@ export default function SubmissionDetail() {
   const [editedFeedback, setEditedFeedback] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [studentLabel, setStudentLabel] = useState<string | null>(null);
+  const gradingRecoverySent = useRef(false);
+
+  useEffect(() => {
+    gradingRecoverySent.current = false;
+  }, [submissionId]);
 
   useEffect(() => {
     if (!submissionId) return;
@@ -57,6 +63,38 @@ export default function SubmissionDetail() {
     return unsubscribeSub;
   }, [submissionId, navigate]);
 
+  useEffect(() => {
+    if (!submissionId || !submission || !user) return;
+    const stuck =
+      submission.status === 'pending' &&
+      submission.feedback.trim() === AI_GRADING_PLACEHOLDER.trim();
+    if (!stuck || gradingRecoverySent.current) return;
+    gradingRecoverySent.current = true;
+
+    void (async () => {
+      try {
+        const token = await auth.currentUser?.getIdToken();
+        if (!token) {
+          gradingRecoverySent.current = false;
+          return;
+        }
+        const res = await fetch('/api/submissions/complete-grade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ submissionId }),
+        });
+        if (!res.ok) {
+          gradingRecoverySent.current = false;
+        }
+      } catch {
+        gradingRecoverySent.current = false;
+      }
+    })();
+  }, [submissionId, submission, user]);
+
   const handleSaveRevision = async () => {
     if (!submissionId) return;
     setIsSaving(true);
@@ -64,7 +102,8 @@ export default function SubmissionDetail() {
       await updateDoc(doc(db, 'submissions', submissionId), {
         score: editedScore,
         feedback: editedFeedback,
-        status: 'revised'
+        status: 'revised',
+        teacherRevisedAt: new Date().toISOString(),
       });
       setIsEditing(false);
     } catch (error) {
@@ -137,6 +176,22 @@ export default function SubmissionDetail() {
 
             {isEditing ? (
               <div className="space-y-6">
+                {submission.aiFeedback != null && submission.aiFeedback !== '' && (
+                  <div className="p-5 rounded-2xl border border-indigo-100 bg-white/80 space-y-3">
+                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-500">
+                      Original AI output (stored for research — unchanged on save)
+                    </p>
+                    <div className="flex items-center gap-4">
+                      <div className="text-center shrink-0">
+                        <span className="text-3xl font-black text-indigo-500">{submission.aiScore ?? '—'}</span>
+                        <span className="text-[10px] text-indigo-400 block font-bold uppercase mt-0.5">AI score</span>
+                      </div>
+                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap border-l border-indigo-100 pl-4">
+                        {submission.aiFeedback}
+                      </p>
+                    </div>
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-2">Total Score</label>
                   <input
@@ -178,12 +233,13 @@ export default function SubmissionDetail() {
                 submission.feedback.trim() === AI_GRADING_PLACEHOLDER.trim() ? (
                   <div className="p-6 bg-amber-50 rounded-2xl border border-amber-100">
                     <p className="text-amber-900 font-medium">
-                      Waiting for automatic grading (OpenAI). This usually finishes within a minute while the student
-                      keeps this tab open after submitting.
+                      Automatic grading is running on the server. This usually finishes within a minute—you do not need
+                      the student to keep a tab open.
                     </p>
                     <p className="text-sm text-amber-800/80 mt-2">
-                      If this stays here for several minutes, grading may have failed (API key, network). The student
-                      should try submitting again or ask you to grade manually.
+                      If this message remains for several minutes, OpenAI or Firebase Admin may be misconfigured on the
+                      server, or the job failed—check the dev server logs. Refreshing this page retries grading for
+                      stuck submissions.
                     </p>
                   </div>
                 ) : (
@@ -207,6 +263,25 @@ export default function SubmissionDetail() {
                     </p>
                   </div>
                 )}
+
+                {user?.role === 'teacher' &&
+                  submission.status === 'revised' &&
+                  submission.aiFeedback != null &&
+                  submission.aiFeedback !== '' && (
+                    <details className="group rounded-xl border border-gray-200 bg-gray-50/80 p-4">
+                      <summary className="cursor-pointer text-sm font-bold text-gray-600 list-none flex items-center gap-2 [&::-webkit-details-marker]:hidden">
+                        <span className="text-indigo-500 group-open:rotate-90 transition-transform">›</span>
+                        Original AI grading (archived for comparison)
+                      </summary>
+                      <div className="mt-4 pt-4 border-t border-gray-200 flex flex-col sm:flex-row gap-4 text-sm text-gray-700">
+                        <div className="shrink-0 text-center sm:text-left">
+                          <span className="text-2xl font-black text-gray-500">{submission.aiScore ?? '—'}</span>
+                          <span className="block text-[10px] font-bold uppercase text-gray-400 mt-0.5">AI score</span>
+                        </div>
+                        <p className="leading-relaxed whitespace-pre-wrap flex-1">{submission.aiFeedback}</p>
+                      </div>
+                    </details>
+                  )}
               </div>
             )}
           </section>
@@ -214,23 +289,7 @@ export default function SubmissionDetail() {
 
         {/* Assessment Context Sidebar */}
         <div className="space-y-6">
-          <section className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
-            <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-indigo-600" />
-              Rubric Reference
-            </h3>
-            <div className="space-y-4">
-              {assessment.rubric.criteria.map((c, i) => (
-                <div key={i} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="font-bold text-sm text-gray-900">{c.name}</span>
-                    <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">Max {c.maxPoints}</span>
-                  </div>
-                  <p className="text-xs text-gray-500 leading-relaxed">{c.description}</p>
-                </div>
-              ))}
-            </div>
-          </section>
+          <AssessmentRubricPanel assessment={assessment} heading="Rubric reference" />
         </div>
       </div>
     </div>

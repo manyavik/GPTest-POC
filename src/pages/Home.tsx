@@ -1,20 +1,30 @@
+import { useEffect } from 'react';
 import { motion } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, GraduationCap, School, CheckCircle, ArrowRight } from 'lucide-react';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithRedirect } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, AUTH_PENDING_ROLE_KEY, AUTH_POST_LOGIN_NAV_KEY } from '../context/AuthContext';
 
 export default function Home() {
   const { user, setRole } = useAuth();
   const navigate = useNavigate();
 
+  useEffect(() => {
+    const to = sessionStorage.getItem(AUTH_POST_LOGIN_NAV_KEY);
+    if (to && user) {
+      sessionStorage.removeItem(AUTH_POST_LOGIN_NAV_KEY);
+      navigate(to, { replace: true });
+    }
+  }, [user, navigate]);
+
   const handleLogin = async (role: 'teacher' | 'student') => {
     console.log("Home: Starting login for role", role);
     try {
       if (!auth.currentUser) {
-        console.log("Home: No current user, signing in with popup");
-        await signInWithPopup(auth, googleProvider);
+        sessionStorage.setItem(AUTH_PENDING_ROLE_KEY, role);
+        await signInWithRedirect(auth, googleProvider);
+        return;
       }
       console.log("Home: User authenticated, setting role");
       await setRole(role);
