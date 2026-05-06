@@ -11,11 +11,12 @@ export default function Home() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const to = sessionStorage.getItem(AUTH_POST_LOGIN_NAV_KEY);
-    if (to && user) {
-      sessionStorage.removeItem(AUTH_POST_LOGIN_NAV_KEY);
-      navigate(to, { replace: true });
-    }
+    if (!user) return;
+    // In some hosted redirect flows, sessionStorage keys may be unavailable/lost.
+    // Always take authenticated users to dashboard to avoid landing-page stalls.
+    const to = sessionStorage.getItem(AUTH_POST_LOGIN_NAV_KEY) || '/dashboard';
+    sessionStorage.removeItem(AUTH_POST_LOGIN_NAV_KEY);
+    navigate(to, { replace: true });
   }, [user, navigate]);
 
   const handleLogin = async (role: 'teacher' | 'student') => {

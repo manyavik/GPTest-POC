@@ -1,0 +1,18 @@
+# EC2 (or any VPS): copy this repo, create a .env on the server (never commit it), then:
+#   docker compose up -d --build
+#
+# Requires OPENAI_API_KEY and FIREBASE_SERVICE_ACCOUNT_JSON (single-line JSON) in .env
+# Optional: PORT=8080 (default inside container)
+
+services:
+  web:
+    build: .
+    image: gptest-poc:local
+    ports:
+      - "80:8080"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+    restart: unless-stopped
