@@ -15,21 +15,32 @@ export default function Dashboard() {
   const [newClassName, setNewClassName] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (!user) return;
+    setLoadError(null);
+    setLoading(true);
 
     const q = user.role === 'teacher' 
       ? query(collection(db, 'classes'), where('teacherId', '==', user.uid))
       : query(collection(db, 'classes'), where('studentIds', 'array-contains', user.uid));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const classList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Class));
-      setClasses(classList);
-      setLoading(false);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const classList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Class));
+        setClasses(classList);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('Dashboard classes query failed:', error);
+        setLoadError(error.message || 'Could not load classes.');
+        setLoading(false);
+      }
+    );
 
     return unsubscribe;
   }, [user]);
@@ -98,6 +109,14 @@ export default function Dashboard() {
   };
 
   if (loading) return <div className="flex items-center justify-center h-64">Loading classes...</div>;
+  if (loadError) {
+    return (
+      <div className="max-w-xl mx-auto mt-10 p-6 bg-red-50 border border-red-100 rounded-2xl text-red-800">
+        <p className="font-bold mb-2">Could not load dashboard</p>
+        <p className="text-sm leading-relaxed">{loadError}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
