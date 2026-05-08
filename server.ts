@@ -53,6 +53,72 @@ async function assertCanGradeSubmission(uid: string, sub: Record<string, unknown
   throw new Error("Forbidden");
 }
 
+type ResearchExportRow = {
+  submissionId: string;
+  assessmentId: string;
+  classId: string;
+  teacherId: string;
+  studentId: string;
+  submissionStatus: string;
+  submittedAt: string;
+  assessmentTitle: string;
+  assessmentPrompt: string;
+  rubricMode: string;
+  rubricTotalPoints: number | "";
+  rubricCriteriaJson: string;
+  studentResponse: string;
+  aiScoreOriginal: number | "";
+  aiFeedbackOriginal: string;
+  teacherFinalScore: number | "";
+  teacherFinalFeedback: string;
+  currentScore: number | "";
+  currentFeedback: string;
+  teacherRevisedAt: string;
+  teacherRevisedBy: string;
+  scoreDeltaTeacherMinusAi: number | "";
+};
+
+function csvEscape(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes('"') || str.includes(",") || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function rowsToCsv(rows: ResearchExportRow[]): string {
+  const headers: (keyof ResearchExportRow)[] = [
+    "submissionId",
+    "assessmentId",
+    "classId",
+    "teacherId",
+    "studentId",
+    "submissionStatus",
+    "submittedAt",
+    "assessmentTitle",
+    "assessmentPrompt",
+    "rubricMode",
+    "rubricTotalPoints",
+    "rubricCriteriaJson",
+    "studentResponse",
+    "aiScoreOriginal",
+    "aiFeedbackOriginal",
+    "teacherFinalScore",
+    "teacherFinalFeedback",
+    "currentScore",
+    "currentFeedback",
+    "teacherRevisedAt",
+    "teacherRevisedBy",
+    "scoreDeltaTeacherMinusAi",
+  ];
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(headers.map((h) => csvEscape(row[h])).join(","));
+  }
+  return lines.join("\n");
+}
+
 async function gradeWithOpenAI(assessment: Record<string, unknown>, submissionContent: string) {
   const rubric = assessment.rubric as
     | {
@@ -234,6 +300,126 @@ async function startServer() {
         ? "Firebase Admin is not configured. Set GOOGLE_APPLICATION_CREDENTIALS to a service account JSON file, or FIREBASE_SERVICE_ACCOUNT_JSON."
         : err?.message || "Failed to start grading.";
       return res.status(503).json({ error: msg });
+    }
+  });
+
+  /**
+   * Research export for teacher-owned data.
+   * Returns AI-original vs teacher-final feedback pairs with assessment context.
+   */
+  app.get("/api/research/export", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    const idToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!idToken) {
+      return res.status(401).json({ error: "Missing Authorization bearer token." });
+    }
+
+    const format = String(req.query.format || "json").toLowerCase();
+    if (format !== "json" && format !== "csv") {
+      return res.status(400).json({ error: "format must be 'json' or 'csv'." });
+    }
+
+    try {
+      const { db, auth } = getFirebaseAdmin();
+      const decoded = await auth.verifyIdToken(idToken);
+      const teacherUid = decoded.uid;
+
+      const classesSnap = await db.collection("classes").where("teacherId", "==", teacherUid).get();
+      const classIds = new Set(classesSnap.docs.map((d) => d.id));
+
+      const assessmentsSnap = await db.collection("assessments").get();
+      const assessmentById = new Map<string, Record<string, unknown>>();
+      for (const doc of assessmentsSnap.docs) {
+        const a = doc.data() as Record<string, unknown>;
+        const classId = String(a.classId || "");
+        const teacherId = String(a.teacherId || "");
+        if (teacherId === teacherUid || (classId && classIds.has(classId))) {
+          assessmentById.set(doc.id, a);
+        }
+      }
+
+      if (assessmentById.size === 0) {
+        if (format === "csv") {
+          res.setHeader("Content-Type", "text/csv; charset=utf-8");
+          res.setHeader("Content-Disposition", `attachment; filename="research-export-${teacherUid}.csv"`);
+          return res.status(200).send(rowsToCsv([]));
+        }
+        return res.json({
+          count: 0,
+          exportedAt: new Date().toISOString(),
+          teacherUid,
+          rows: [],
+        });
+      }
+
+      const submissionsSnap = await db.collection("submissions").get();
+      const rows: ResearchExportRow[] = [];
+
+      for (const doc of submissionsSnap.docs) {
+        const s = doc.data() as Record<string, unknown>;
+        const assessmentId = String(s.assessmentId || "");
+        const assessment = assessmentById.get(assessmentId);
+        if (!assessment) continue;
+
+        const rubric = (assessment.rubric || {}) as {
+          mode?: string;
+          totalPoints?: number;
+          criteria?: unknown[];
+        };
+        const aiScore = typeof s.aiScore === "number" ? s.aiScore : "";
+        const currentScore = typeof s.score === "number" ? s.score : "";
+        const teacherFinalScore = typeof s.teacherFinalScore === "number" ? s.teacherFinalScore : currentScore;
+        const delta =
+          typeof teacherFinalScore === "number" && typeof aiScore === "number" ? teacherFinalScore - aiScore : "";
+
+        rows.push({
+          submissionId: doc.id,
+          assessmentId,
+          classId: String(assessment.classId || ""),
+          teacherId: String(s.teacherId || String(assessment.teacherId || teacherUid)),
+          studentId: String(s.studentId || ""),
+          submissionStatus: String(s.status || ""),
+          submittedAt: String(s.submittedAt || ""),
+          assessmentTitle: String(assessment.title || ""),
+          assessmentPrompt: String(assessment.prompt || ""),
+          rubricMode: String(rubric.mode || (Array.isArray(rubric.criteria) && rubric.criteria.length > 0 ? "custom" : "default")),
+          rubricTotalPoints: typeof rubric.totalPoints === "number" ? rubric.totalPoints : "",
+          rubricCriteriaJson: JSON.stringify(rubric.criteria || []),
+          studentResponse: String(s.content || ""),
+          aiScoreOriginal: aiScore,
+          aiFeedbackOriginal: String(s.aiFeedback || ""),
+          teacherFinalScore,
+          teacherFinalFeedback: String(s.teacherFinalFeedback || s.feedback || ""),
+          currentScore,
+          currentFeedback: String(s.feedback || ""),
+          teacherRevisedAt: String(s.teacherRevisedAt || ""),
+          teacherRevisedBy: String(s.teacherRevisedBy || ""),
+          scoreDeltaTeacherMinusAi: delta,
+        });
+      }
+
+      rows.sort((a, b) => {
+        if (a.submittedAt < b.submittedAt) return -1;
+        if (a.submittedAt > b.submittedAt) return 1;
+        return 0;
+      });
+
+      if (format === "csv") {
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="research-export-${teacherUid}.csv"`);
+        return res.status(200).send(rowsToCsv(rows));
+      }
+
+      return res.json({
+        count: rows.length,
+        exportedAt: new Date().toISOString(),
+        teacherUid,
+        rows,
+      });
+    } catch (e: unknown) {
+      console.error("research export error:", e);
+      const err = e as { message?: string };
+      return res.status(500).json({ error: err?.message || "Failed to export research data." });
     }
   });
 

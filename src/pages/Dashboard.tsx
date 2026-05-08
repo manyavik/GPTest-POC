@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Users, BookOpen, ArrowRight, Hash, Trash2 } from 'lucide-react';
-import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, arrayUnion, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, arrayUnion, getDocs, deleteDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { Class } from '../types';
@@ -59,6 +59,17 @@ export default function Dashboard() {
 
     setCreating(true);
     try {
+      // Ensure Firestore role doc is present/updated so class create rules pass consistently.
+      await setDoc(
+        doc(db, 'users', user.uid),
+        {
+          uid: user.uid,
+          email: user.email || '',
+          displayName: user.displayName || '',
+          role: 'teacher',
+        },
+        { merge: true }
+      );
       await addDoc(collection(db, 'classes'), newClass);
       setNewClassName('');
       setShowCreateModal(false);

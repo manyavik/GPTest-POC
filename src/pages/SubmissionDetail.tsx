@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Sparkles, User, ArrowLeft, Save, Edit3, AlertTriangle } from 'lucide-react';
-import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
+import { arrayUnion, doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
 import { AI_GRADING_PLACEHOLDER } from '../constants/submission';
 import { auth, db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -96,7 +96,7 @@ export default function SubmissionDetail() {
   }, [submissionId, submission, user]);
 
   const handleSaveRevision = async () => {
-    if (!submissionId) return;
+    if (!submissionId || !user || !submission) return;
     setIsSaving(true);
     try {
       await updateDoc(doc(db, 'submissions', submissionId), {
@@ -104,6 +104,17 @@ export default function SubmissionDetail() {
         feedback: editedFeedback,
         status: 'revised',
         teacherRevisedAt: new Date().toISOString(),
+        teacherRevisedBy: user.uid,
+        teacherFinalScore: editedScore,
+        teacherFinalFeedback: editedFeedback,
+        teacherRevisionHistory: arrayUnion({
+          editedAt: new Date().toISOString(),
+          editedBy: user.uid,
+          previousScore: submission.score,
+          previousFeedback: submission.feedback,
+          newScore: editedScore,
+          newFeedback: editedFeedback,
+        }),
       });
       setIsEditing(false);
     } catch (error) {

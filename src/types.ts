@@ -58,4 +58,19 @@ export interface Submission {
   aiFeedback?: string;
   /** Set when a teacher saves a revision over AI output. */
   teacherRevisedAt?: string;
+  /** Teacher-final grade snapshot (can mirror current score when revised). */
+  teacherFinalScore?: number;
+  /** Teacher-final feedback snapshot (can mirror current feedback when revised). */
+  teacherFinalFeedback?: string;
+  /** Who saved the latest teacher revision. */
+  teacherRevisedBy?: string;
+  /** Optional history of teacher edits for research/dataset analysis. */
+  teacherRevisionHistory?: {
+    editedAt: string;
+    editedBy: string;
+    previousScore: number;
+    previousFeedback: string;
+    newScore: number;
+    newFeedback: string;
+  }[];
 }
