@@ -115,12 +115,16 @@ export default function ClassDetail() {
             criteria: customCriteriaToRubric(rubricTotalPoints, customCriteria),
           };
 
+    const normalizedDueDate = newDueDate
+      ? new Date(`${newDueDate}T23:59:59`).toISOString()
+      : '';
+
     const newAssessment = {
       classId,
       teacherId: user.uid,
       title: newTitle.trim(),
       prompt: newPrompt,
-      dueDate: newDueDate,
+      dueDate: normalizedDueDate,
       rubric,
     };
 
@@ -255,7 +259,7 @@ export default function ClassDetail() {
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-2">Due Date</label>
                   <input
-                    type="datetime-local"
+                    type="date"
                     value={newDueDate}
                     onChange={(e) => setNewDueDate(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500"
@@ -321,8 +325,16 @@ export default function ClassDetail() {
                         min={1}
                         max={1000}
                         required
-                        value={rubricTotalPoints}
-                        onChange={(e) => setRubricTotalPoints(Math.max(1, Number(e.target.value) || 1))}
+                        value={rubricTotalPoints || ''}
+                        onChange={(e) => {
+                          if (e.target.value === '') {
+                            setRubricTotalPoints(0);
+                            return;
+                          }
+                          const next = Number(e.target.value);
+                          if (Number.isNaN(next)) return;
+                          setRubricTotalPoints(Math.max(1, Math.floor(next)));
+                        }}
                         className="w-32 px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-indigo-700"
                       />
                     </div>
@@ -337,8 +349,16 @@ export default function ClassDetail() {
                           min={1}
                           max={1000}
                           required
-                          value={rubricTotalPoints}
-                          onChange={(e) => setRubricTotalPoints(Math.max(1, Number(e.target.value) || 1))}
+                          value={rubricTotalPoints || ''}
+                          onChange={(e) => {
+                            if (e.target.value === '') {
+                              setRubricTotalPoints(0);
+                              return;
+                            }
+                            const next = Number(e.target.value);
+                            if (Number.isNaN(next)) return;
+                            setRubricTotalPoints(Math.max(1, Math.floor(next)));
+                          }}
                           className="w-32 px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-indigo-700"
                         />
                       </div>
