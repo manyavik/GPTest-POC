@@ -148,9 +148,12 @@ service cloud.firestore {
 
     match /assessments/{assessmentId} {
       allow read: if isAuthenticated();
-      allow create: if isTeacher();
-      allow update: if isTeacher() && request.auth.uid == get(/databases/$(database)/documents/classes/$(resource.data.classId)).data.teacherId;
-      allow delete: if isTeacher() && request.auth.uid == get(/databases/$(database)/documents/classes/$(resource.data.classId)).data.teacherId;
+      // Use class ownership checks directly; avoids brittle dependency on users/{uid}.role.
+      allow create: if isAuthenticated()
+        && request.resource.data.teacherId == request.auth.uid
+        && isTeacherOfClassId(request.resource.data.classId);
+      allow update: if isAuthenticated() && isTeacherOfClassId(resource.data.classId);
+      allow delete: if isAuthenticated() && isTeacherOfClassId(resource.data.classId);
     }
 
     match /submissions/{submissionId} {

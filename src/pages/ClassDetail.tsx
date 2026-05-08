@@ -128,9 +128,15 @@ export default function ClassDetail() {
       rubric,
     };
 
-    await addDoc(collection(db, 'assessments'), newAssessment);
-    resetAssessmentForm();
-    setShowCreateAssessment(false);
+    try {
+      await addDoc(collection(db, 'assessments'), newAssessment);
+      resetAssessmentForm();
+      setShowCreateAssessment(false);
+    } catch (error) {
+      console.error('Create assessment failed:', error);
+      const message = error instanceof Error ? error.message : 'Could not create assessment.';
+      alert(`Create assessment failed: ${message}`);
+    }
   };
 
   const handleDeleteAssessment = async (id: string) => {
