@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { motion } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, GraduationCap, School, CheckCircle, ArrowRight } from 'lucide-react';
-import { signInWithRedirect } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import { useAuth, AUTH_PENDING_ROLE_KEY, AUTH_POST_LOGIN_NAV_KEY } from '../context/AuthContext';
 
@@ -24,8 +24,29 @@ export default function Home() {
     try {
       if (!auth.currentUser) {
         sessionStorage.setItem(AUTH_PENDING_ROLE_KEY, role);
-        await signInWithRedirect(auth, googleProvider);
-        return;
+        try {
+          // Popup is usually more reliable on custom-hosted domains (e.g. Railway).
+          await signInWithPopup(auth, googleProvider);
+        } catch (popupError: unknown) {
+          const popupCode =
+            typeof popupError === 'object' &&
+            popupError !== null &&
+            'code' in popupError &&
+            typeof (popupError as { code?: unknown }).code === 'string'
+              ? (popupError as { code: string }).code
+              : '';
+
+          // Fallback to redirect when popup is blocked or cannot be opened.
+          if (
+            popupCode === 'auth/popup-blocked' ||
+            popupCode === 'auth/popup-closed-by-user' ||
+            popupCode === 'auth/cancelled-popup-request'
+          ) {
+            await signInWithRedirect(auth, googleProvider);
+            return;
+          }
+          throw popupError;
+        }
       }
       console.log("Home: User authenticated, setting role");
       await setRole(role);
