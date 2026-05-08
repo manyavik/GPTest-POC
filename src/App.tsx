@@ -6,11 +6,15 @@ import ClassDetail from './pages/ClassDetail';
 import AssessmentDetail from './pages/AssessmentDetail';
 import SubmissionDetail from './pages/SubmissionDetail';
 import { Layout } from './components/Layout';
+import { auth } from './firebase';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
-  return user ? <>{children}</> : <Navigate to="/" />;
+  // Avoid redirect loops during auth-context hydration right after login.
+  if (loading || (!user && auth.currentUser)) {
+    return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  }
+  return user ? <>{children}</> : <Navigate to="/" replace />;
 }
 
 export default function App() {
