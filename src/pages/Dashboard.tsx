@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Users, BookOpen, ArrowRight, Hash, Trash2 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, arrayUnion, getDocs, deleteDoc, setDoc } from 'firebase/firestore';
@@ -18,6 +18,7 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
   const [creating, setCreating] = useState(false);
+  const createInFlight = useRef(false);
 
   useEffect(() => {
     if (!user) return;
@@ -47,7 +48,7 @@ export default function Dashboard() {
 
   const handleCreateClass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !newClassName.trim()) return;
+    if (!user || !newClassName.trim() || createInFlight.current) return;
 
     const newClass = {
       name: newClassName,
@@ -57,6 +58,7 @@ export default function Dashboard() {
       inviteCode: Math.random().toString(36).substring(2, 8).toUpperCase(),
     };
 
+    createInFlight.current = true;
     setCreating(true);
     try {
       // Ensure Firestore role doc is present/updated so class create rules pass consistently.
@@ -80,6 +82,7 @@ export default function Dashboard() {
         `${msg}\n\nIf this says permission denied: deploy the latest firestore.rules to your named Firestore database, or ask the repo owner.`
       );
     } finally {
+      createInFlight.current = false;
       setCreating(false);
     }
   };
